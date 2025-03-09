@@ -54,26 +54,6 @@ def max_drawdown(series):
     drawdown = series / roll_max - 1
     return drawdown.min()
 
-def drawdown_recovery_period(series):
-    """
-    Calculate the number of months from the trough of the maximum drawdown 
-    to when the series recovers to its previous peak.
-    If recovery has not occurred by the end of the series, returns np.nan.
-    """
-    if series.empty:
-        return np.nan
-    roll_max = series.cummax()
-    drawdown = series / roll_max - 1
-    trough_date = drawdown.idxmin()
-    peak_before_trough = series.loc[:trough_date].max()
-    post_trough = series.loc[trough_date:]
-    recovery_dates = post_trough[post_trough >= peak_before_trough]
-    if recovery_dates.empty:
-        return np.nan
-    recovery_date = recovery_dates.index[0]
-    months = (recovery_date.year - trough_date.year) * 12 + (recovery_date.month - trough_date.month)
-    return months
-
 def compute_metrics(cum_series):
     """
     Given a cumulative return series (rebased to start at 1),
@@ -84,7 +64,6 @@ def compute_metrics(cum_series):
     vol = calculate_annualized_vol(monthly_returns)
     info_ratio = calculate_info_ratio(cagr, vol)
     mdd = max_drawdown(cum_series)
-    dd_recovery = drawdown_recovery_period(cum_series)
     avg_return = calculate_avg_return(monthly_returns)
     pos_pct = percent_positive(monthly_returns)
     avg_pos = avg_positive_return(monthly_returns)
@@ -95,7 +74,6 @@ def compute_metrics(cum_series):
         'Volatility': vol,
         'Information Ratio': info_ratio,
         'Max Drawdown': mdd,
-        'Max Drawdown Recovery (months)': dd_recovery,
         'Average Monthly Return': avg_return,
         '% Positive Months': pos_pct,
         'Avg Return (Positive Months)': avg_pos,
@@ -187,7 +165,7 @@ def analyze_strategies(cum_df, oos_dict, portfolio_weights, excel_filename='outp
     # Prepare dictionaries to hold metrics and pivot tables for each strategy
     metrics_dict = {}
     pivot_dict = {}
-    # Initialize monthly_returns_all with the full index so that the first month is included.
+    # For portfolio and correlation, include the first month by filling NaN with 0.
     monthly_returns_all = pd.DataFrame(index=cum_df_rebased.index)
 
     # Define the periods to analyze for strategies
@@ -201,9 +179,9 @@ def analyze_strategies(cum_df, oos_dict, portfolio_weights, excel_filename='outp
     for strat in cum_df_rebased.columns:
         strat_series = cum_df_rebased[strat].dropna()
         strat_metrics = {}
-        # For metrics and pivot, use the dropna version (ignoring the first NaN)
+        # Use dropna for metrics and pivot table
         strat_monthly_returns_metrics = strat_series.pct_change().dropna()
-        # For portfolio and correlation, fill the first NaN with 0 so the first month is included
+        # Use fillna(0) for portfolio calculations so that the first month is included.
         strat_monthly_returns_for_portfolio = strat_series.pct_change().fillna(0)
         monthly_returns_all[strat] = strat_monthly_returns_for_portfolio
 
@@ -231,8 +209,8 @@ def analyze_strategies(cum_df, oos_dict, portfolio_weights, excel_filename='outp
             else:
                 strat_metrics[label] = {key: np.nan for key in [
                     'CAGR', 'Volatility', 'Information Ratio', 'Max Drawdown',
-                    'Max Drawdown Recovery (months)', 'Average Monthly Return',
-                    '% Positive Months', 'Avg Return (Positive Months)', 'Avg Return (Negative Months)'
+                    'Average Monthly Return', '% Positive Months',
+                    'Avg Return (Positive Months)', 'Avg Return (Negative Months)'
                 ]}
         
         metrics_df = pd.DataFrame({period: pd.Series(metrics) for period, metrics in strat_metrics.items()})
@@ -246,7 +224,6 @@ def analyze_strategies(cum_df, oos_dict, portfolio_weights, excel_filename='outp
         print("-" * 50)
 
     # ----- Portfolio Metrics and Pivot for Portfolio Sheet -----
-    # Align monthly returns across strategies (using the full index with first month = 0)
     monthly_returns_all = monthly_returns_all.sort_index()
     corr_matrix = monthly_returns_all.corr()
 
@@ -254,7 +231,7 @@ def analyze_strategies(cum_df, oos_dict, portfolio_weights, excel_filename='outp
     common_strats = [s for s in portfolio_weights if s in monthly_returns_all.columns]
     weights_series = pd.Series(portfolio_weights)[common_strats]
     portfolio_returns = (monthly_returns_all[common_strats] * weights_series).sum(axis=1)
-    # Rebuild the portfolio cumulative series from monthly returns so that the first month is included.
+    # Rebuild portfolio cumulative series from monthly returns so that the first month is included.
     portfolio_cum_full = (1 + portfolio_returns).cumprod()
     
     # Define portfolio periods: 1Y, 5Y, and Full sample (omit OOS for portfolio)
@@ -273,11 +250,11 @@ def analyze_strategies(cum_df, oos_dict, portfolio_weights, excel_filename='outp
         else:
             portfolio_metrics_dict[label] = {key: np.nan for key in [
                 'CAGR', 'Volatility', 'Information Ratio', 'Max Drawdown',
-                'Max Drawdown Recovery (months)', 'Average Monthly Return',
-                '% Positive Months', 'Avg Return (Positive Months)', 'Avg Return (Negative Months)'
+                'Average Monthly Return', '% Positive Months',
+                'Avg Return (Positive Months)', 'Avg Return (Negative Months)'
             ]}
     portfolio_metrics_df = pd.DataFrame({period: pd.Series(metrics) for period, metrics in portfolio_metrics_dict.items()})
-
+    
     portfolio_pivot = create_year_month_pivot(portfolio_returns)
 
     # Function to rebase cumulative series to 100
@@ -292,8 +269,19 @@ def analyze_strategies(cum_df, oos_dict, portfolio_weights, excel_filename='outp
     portfolio_sheet = 'Portfolio'
     # Write portfolio metrics table at top
     portfolio_metrics_df.to_excel(writer, sheet_name=portfolio_sheet, startrow=1, startcol=0)
-    # Write correlation matrix below metrics table
-    corr_start_row = portfolio_metrics_df.shape[0] + 4
+    
+    # --- NEW SECTION: Write Full Sample Metrics for All Strategies (Transposed) ---
+    full_metrics_list = {}
+    for strat, metrics_df in metrics_dict.items():
+        if 'Full' in metrics_df.columns:
+            full_metrics_list[strat] = metrics_df['Full']
+    # Now metrics are rows and strategies are columns.
+    full_metrics_df = pd.DataFrame(full_metrics_list)
+    full_metrics_start_row = portfolio_metrics_df.shape[0] + 4
+    full_metrics_df.to_excel(writer, sheet_name=portfolio_sheet, startrow=full_metrics_start_row, startcol=0)
+    
+    # Write correlation matrix below full sample metrics table
+    corr_start_row = full_metrics_start_row + full_metrics_df.shape[0] + 4
     corr_matrix.to_excel(writer, sheet_name=portfolio_sheet, startrow=corr_start_row, startcol=0)
     ws_portfolio = writer.sheets[portfolio_sheet]
     nrows, ncols = corr_matrix.shape
@@ -304,6 +292,7 @@ def analyze_strategies(cum_df, oos_dict, portfolio_weights, excel_filename='outp
         'mid_color': "#FFEB84",
         'max_color': "#63BE7B"
     })
+    
     # Write portfolio year/month pivot below correlation matrix
     pivot_start_row = corr_start_row + nrows + 4
     portfolio_pivot.to_excel(writer, sheet_name=portfolio_sheet, startrow=pivot_start_row, startcol=0)
@@ -377,5 +366,3 @@ if __name__ == "__main__":
     
     analyze_strategies(df, oos_dict, portfolio_weights, excel_filename='strategy_analysis_test.xlsx')
     print("Simulated data test case executed and Excel workbook 'strategy_analysis_test.xlsx' has been created.")
-
-
