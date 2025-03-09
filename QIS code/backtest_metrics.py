@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import blp
 from datetime import datetime
 import xlsxwriter
 
@@ -339,19 +340,55 @@ def analyze_strategies(cum_df, oos_dict, portfolio_weights, excel_filename='outp
     writer.close()
     print(f"Excel workbook saved as {excel_filename}")
 
+
+def get_bbg_px_last(tickers, start_date, end_date, freq='ME'):
+    """
+    Retrieves Bloomberg PX_LAST data for a list of tickers between start_date and end_date
+    with the specified frequency (default 'ME' for month-end). Returns a DataFrame where the 
+    index is a DatetimeIndex (with the given frequency) and the columns are the tickers.
+    
+    Parameters:
+        tickers (list): List of Bloomberg ticker strings.
+        start_date (str or datetime): The start date (e.g., '2010-01-01').
+        end_date (str or datetime): The end date (e.g., '2020-12-31').
+        freq (str): Frequency for the output index; default is 'ME' (month-end). 
+                    (Other options include 'B' for business day, etc.)
+                    
+    Returns:
+        pd.DataFrame: DataFrame with dates as index and tickers as columns containing PX_LAST.
+    """
+    # Retrieve Bloomberg historical data. 'Per' specifies periodicity; here 'M' is used for monthly.
+    # The blp.bdh function is assumed to return a DataFrame with a MultiIndex on the columns 
+    # (e.g., (ticker, field)).
+    data = blp.bdh(tickers, 'PX_LAST', start_date, end_date, Per='M')
+    
+    # If the returned DataFrame has a MultiIndex for columns, extract the 'PX_LAST' level.
+    if isinstance(data.columns, pd.MultiIndex):
+        data = data.xs('PX_LAST', axis=1, level=1)
+    
+    # Create a full date range with the given frequency to ensure consistency
+    dates = pd.date_range(start=start_date, end=end_date, freq=freq)
+    data = data.reindex(dates)
+    
+    # Optionally, sort the index if not already sorted.
+    data.sort_index(inplace=True)
+    
+    return data
+
 # ----- Example Usage -----
 
 if __name__ == "__main__":
-    # Generate a date range for 10 years of monthly data (120 months)
-    dates = pd.date_range(start='2010-01-01', periods=120, freq='ME')
-    np.random.seed(100)
-    data = {
-        'Strategy_A': np.cumprod(1 + np.random.normal(0.01, 0.03, size=len(dates))),
-        'Strategy_B': np.cumprod(1 + np.random.normal(0.012, 0.04, size=len(dates))),
-        'Strategy_C': np.cumprod(1 + np.random.normal(0.008, 0.05, size=len(dates)))
-    }
-    df = pd.DataFrame(data, index=dates)
+    # Define the tickers you want to retrieve data for.
+    tickers = ['Strategy_A', 'Strategy_B', 'Strategy_C']  # Replace with your Bloomberg tickers.
     
+    # Set the start and end dates.
+    start_date = '2010-01-01'
+    end_date   = '2020-12-31'
+    
+    # Retrieve the PX_LAST data in the same format as the simulated data.
+    df = get_bbg_px_last(tickers, start_date, end_date, freq='ME')
+    
+    # Define out-of-sample start dates and portfolio weights (as before).
     oos_dict = {
         'Strategy_A': '2015-01-01',
         'Strategy_B': '2016-01-01',
@@ -364,5 +401,6 @@ if __name__ == "__main__":
         'Strategy_C': 0.2
     }
     
+    # Now call your analysis function with the retrieved Bloomberg data.
     analyze_strategies(df, oos_dict, portfolio_weights, excel_filename='strategy_analysis_test.xlsx')
-    print("Simulated data test case executed and Excel workbook 'strategy_analysis_test.xlsx' has been created.")
+    print("BBG data test case executed and Excel workbook 'strategy_analysis_test.xlsx' has been created.")
