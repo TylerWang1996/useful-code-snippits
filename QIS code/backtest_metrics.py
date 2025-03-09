@@ -341,52 +341,58 @@ def analyze_strategies(cum_df, oos_dict, portfolio_weights, excel_filename='outp
     print(f"Excel workbook saved as {excel_filename}")
 
 
-def get_bbg_px_last(tickers, start_date, end_date, freq='ME'):
+
+def get_bbg_px_last(tickers_dict, start_date, end_date, freq='ME'):
     """
-    Retrieves Bloomberg PX_LAST data for a list of tickers between start_date and end_date
-    with the specified frequency (default 'ME' for month-end). Returns a DataFrame where the 
-    index is a DatetimeIndex (with the given frequency) and the columns are the tickers.
+    Retrieves Bloomberg PX_LAST data for a set of tickers specified in tickers_dict.
     
     Parameters:
-        tickers (list): List of Bloomberg ticker strings.
-        start_date (str or datetime): The start date (e.g., '2010-01-01').
-        end_date (str or datetime): The end date (e.g., '2020-12-31').
-        freq (str): Frequency for the output index; default is 'ME' (month-end). 
-                    (Other options include 'B' for business day, etc.)
-                    
-    Returns:
-        pd.DataFrame: DataFrame with dates as index and tickers as columns containing PX_LAST.
-    """
-    # Retrieve Bloomberg historical data. 'Per' specifies periodicity; here 'M' is used for monthly.
-    # The blp.bdh function is assumed to return a DataFrame with a MultiIndex on the columns 
-    # (e.g., (ticker, field)).
-    data = blp.bdh(tickers, 'PX_LAST', start_date, end_date, Per='M')
+        tickers_dict (dict): Dictionary where keys are Bloomberg tickers (e.g., 'IBM US Equity') 
+                             and values are display names (e.g., 'IBM').
+        start_date (str or datetime): Start date for the data retrieval (e.g., '2010-01-01').
+        end_date (str or datetime): End date for the data retrieval (e.g., '2020-12-31').
+        freq (str): Frequency for the output index; default is 'ME' (month-end).
     
-    # If the returned DataFrame has a MultiIndex for columns, extract the 'PX_LAST' level.
+    Returns:
+        pd.DataFrame: DataFrame with a DatetimeIndex (with the specified frequency) and columns
+                      renamed to the display names provided in tickers_dict.
+    """
+    # Extract Bloomberg tickers from the dictionary keys.
+    bbg_tickers = list(tickers_dict.keys())
+    
+    # Retrieve Bloomberg historical data for PX_LAST using monthly periodicity.
+    data = blp.bdh(bbg_tickers, 'PX_LAST', start_date, end_date, Per='M')
+    
+    # If the returned DataFrame has a MultiIndex on columns, extract the 'PX_LAST' level.
     if isinstance(data.columns, pd.MultiIndex):
         data = data.xs('PX_LAST', axis=1, level=1)
     
-    # Create a full date range with the given frequency to ensure consistency
+    # Create a full date range based on the provided frequency to ensure consistency.
     dates = pd.date_range(start=start_date, end=end_date, freq=freq)
     data = data.reindex(dates)
-    
-    # Optionally, sort the index if not already sorted.
     data.sort_index(inplace=True)
+    
+    # Rename the columns using the provided mapping.
+    data.rename(columns=tickers_dict, inplace=True)
     
     return data
 
 # ----- Example Usage -----
 
 if __name__ == "__main__":
-    # Define the tickers you want to retrieve data for.
-    tickers = ['Strategy_A', 'Strategy_B', 'Strategy_C']  # Replace with your Bloomberg tickers.
+    # Define a dictionary where keys are Bloomberg tickers and values are display names.
+    tickers_dict = {
+        'Strategy_A_Ticker': 'Strategy_A',
+        'Strategy_B_Ticker': 'Strategy_B',
+        'Strategy_C_Ticker': 'Strategy_C'
+    }
     
     # Set the start and end dates.
     start_date = '2010-01-01'
     end_date   = '2020-12-31'
     
-    # Retrieve the PX_LAST data in the same format as the simulated data.
-    df = get_bbg_px_last(tickers, start_date, end_date, freq='ME')
+    # Retrieve the PX_LAST data.
+    df = get_bbg_px_last(tickers_dict, start_date, end_date, freq='ME')
     
     # Define out-of-sample start dates and portfolio weights (as before).
     oos_dict = {
@@ -401,6 +407,6 @@ if __name__ == "__main__":
         'Strategy_C': 0.2
     }
     
-    # Now call your analysis function with the retrieved Bloomberg data.
+    # Call the analysis function with the retrieved Bloomberg data.
     analyze_strategies(df, oos_dict, portfolio_weights, excel_filename='strategy_analysis_test.xlsx')
     print("BBG data test case executed and Excel workbook 'strategy_analysis_test.xlsx' has been created.")
