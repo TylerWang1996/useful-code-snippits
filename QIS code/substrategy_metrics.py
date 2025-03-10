@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-import blp  # Matthew Gilbert's blp package; ensure it is installed and configured
+import blp  # if still needed elsewhere; can be removed if not used
 from datetime import datetime
 import xlsxwriter
 
@@ -9,7 +9,7 @@ import xlsxwriter
 def calculate_cagr(series):
     """
     Calculate the annualized compound growth rate (CAGR) given a cumulative series.
-    Assumes that the series is rebased (first valid value = 1) and is sampled monthly.
+    Assumes the series is rebased (first valid value = 1) and is sampled monthly.
     """
     if len(series) < 2:
         return np.nan
@@ -144,36 +144,44 @@ def generate_sheet_name(base, existing_names):
                 return new_name
             counter += 1
 
-# ----- Alternate Main Analysis Function -----
-# This alternate version uses a single common out-of-sample date (oos_date)
-# for all strategies and uses a separate portfolio ticker (portfolio_df) instead of weights.
+# ----- Alternate Main Analysis Function (Using Portfolio Ticker from Excel) -----
+# This version uses a single common out-of-sample date and the portfolio ticker series is provided separately.
 
-def analyze_strategies_alternate(strategies_df, portfolio_df, oos_date, excel_filename='output_alternate.xlsx'):
+def analyze_strategies_alternate(strategies_df, portfolio_df, oos_date, excel_filename='strategy_analysis_from_excel.xlsx'):
     """
-    strategies_df: DataFrame where index is datetime (monthly) and columns are strategies' cumulative returns.
-                   Each series may have a different base; they will be uniformly rebased to start at 1.
-    portfolio_df: DataFrame with a single column representing the portfolio's cumulative returns.
-                  It is assumed to be retrieved separately (e.g. via get_bbg_px_last) and will be rebased to start at 1.
+    strategies_df: DataFrame with individual strategies' cumulative returns.
+                   Columns are ticker symbols (to be converted to friendly names using ticker_mapping)
+                   and the index contains month-end dates.
+    portfolio_df: DataFrame with a single column representing the portfolio ticker's cumulative returns.
+                  The column header is a ticker symbol (to be converted to a friendly name).
     oos_date: A single out-of-sample date (string or datetime) to be applied to all series.
     excel_filename: Filename for the output Excel workbook.
     """
+    # --- Process Ticker to Name Conversion ---
+    # Define your mapping dictionary here.
+    ticker_mapping = {
+        'PortfolioTicker': 'Portfolio',
+        'Strategy_A_Ticker': 'Strategy_A',
+        'Strategy_B_Ticker': 'Strategy_B',
+        'Strategy_C_Ticker': 'Strategy_C'
+        # Add additional mappings as needed.
+    }
+    # Rename columns in strategies_df and portfolio_df according to ticker_mapping.
+    strategies_df.rename(columns=ticker_mapping, inplace=True)
+    portfolio_df.rename(columns=ticker_mapping, inplace=True)
+    
     # --- Process Individual Strategies ---
-    # Rebase each strategy so that its first available value is 1.
+    # Rebase each strategy so that its first valid value is 1.
     cum_df_rebased = strategies_df.copy()
     for col in cum_df_rebased.columns:
         first_valid = cum_df_rebased[col].dropna().iloc[0]
         cum_df_rebased[col] = cum_df_rebased[col] / first_valid
 
-    # Ensure the index is a DatetimeIndex.
-    if not isinstance(cum_df_rebased.index, pd.DatetimeIndex):
-        cum_df_rebased.index = pd.to_datetime(cum_df_rebased.index)
-
+    # The index is assumed to already be a DatetimeIndex (month-end dates).
     metrics_dict = {}
     pivot_dict = {}
-    # For portfolio and correlation, include the first month by filling NaN with 0.
-    monthly_returns_all = pd.DataFrame(index=cum_df_rebased.index)
+    monthly_returns_all = pd.DataFrame(index=cum_df_rebased.index)  # for correlation purposes
     
-    # Use a single OOS date for all strategies.
     common_oos_date = pd.to_datetime(oos_date)
     
     # Define periods for individual strategies.
@@ -181,13 +189,13 @@ def analyze_strategies_alternate(strategies_df, portfolio_df, oos_date, excel_fi
         '1Y': 12,
         '5Y': 60,
         'Full': None,
-        'OOS': 'oos'  # special label for out-of-sample
+        'OOS': 'oos'
     }
     
     for strat in cum_df_rebased.columns:
         strat_series = cum_df_rebased[strat].dropna()
         strat_metrics = {}
-        # For metrics and pivot, drop the first NaN.
+        # Compute monthly returns for metrics and pivot table.
         strat_monthly_returns_metrics = strat_series.pct_change().dropna()
         # For portfolio calculations, fill the first month with 0.
         strat_monthly_returns_for_portfolio = strat_series.pct_change().fillna(0)
@@ -195,7 +203,7 @@ def analyze_strategies_alternate(strategies_df, portfolio_df, oos_date, excel_fi
 
         for label, period in periods.items():
             if period == 'oos':
-                # Use the common OOS date.
+                # Use the common out-of-sample date.
                 oos_start = common_oos_date
                 if oos_start not in strat_series.index:
                     valid_dates = strat_series.index[strat_series.index >= oos_start]
@@ -233,15 +241,14 @@ def analyze_strategies_alternate(strategies_df, portfolio_df, oos_date, excel_fi
         print("-" * 50)
 
     # --- Process Portfolio Ticker ---
-    # Rebase the portfolio series so that its first valid observation is 1.
-    portfolio_series = portfolio_df.squeeze()  # assume portfolio_df has one column
+    portfolio_series = portfolio_df.squeeze()  # Assume a single column
     first_valid = portfolio_series.dropna().iloc[0]
-    portfolio_series = portfolio_series / first_valid
+    portfolio_series = portfolio_series / first_valid  # Rebase so first valid = 1
 
-    # Compute monthly returns for the portfolio; here we fill the first month with 0.
+    # Compute monthly returns for the portfolio (fill the first month with 0).
     portfolio_monthly_returns = portfolio_series.pct_change().fillna(0)
 
-    # Compute portfolio metrics (we use periods: 1Y, 5Y, and Full; omit OOS for portfolio).
+    # Compute portfolio metrics (using periods: 1Y, 5Y, Full; omit OOS for portfolio).
     portfolio_periods = {'1Y': 12, '5Y': 60, 'Full': None}
     portfolio_metrics_dict = {}
     for label, period in portfolio_periods.items():
@@ -262,7 +269,6 @@ def analyze_strategies_alternate(strategies_df, portfolio_df, oos_date, excel_fi
             ]}
     portfolio_metrics_df = pd.DataFrame({period: pd.Series(metrics) for period, metrics in portfolio_metrics_dict.items()})
     
-    # Create a year/month pivot table for the portfolio.
     portfolio_pivot = create_year_month_pivot(portfolio_monthly_returns)
 
     # Function to rebase cumulative series to 100.
@@ -275,7 +281,6 @@ def analyze_strategies_alternate(strategies_df, portfolio_df, oos_date, excel_fi
 
     # Create Portfolio sheet.
     portfolio_sheet = 'Portfolio'
-    # Write portfolio metrics table at top.
     portfolio_metrics_df.to_excel(writer, sheet_name=portfolio_sheet, startrow=1, startcol=0)
     
     # --- NEW SECTION: Write Full Sample Metrics for All Strategies (Transposed) ---
@@ -283,12 +288,11 @@ def analyze_strategies_alternate(strategies_df, portfolio_df, oos_date, excel_fi
     for strat, metrics_df in metrics_dict.items():
         if 'Full' in metrics_df.columns:
             full_metrics_list[strat] = metrics_df['Full']
-    # Metrics as rows and strategies as columns.
     full_metrics_df = pd.DataFrame(full_metrics_list)
     full_metrics_start_row = portfolio_metrics_df.shape[0] + 4
     full_metrics_df.to_excel(writer, sheet_name=portfolio_sheet, startrow=full_metrics_start_row, startcol=0)
     
-    # Write correlation matrix below full sample metrics table.
+    # Write correlation matrix below full sample metrics.
     monthly_returns_all = monthly_returns_all.sort_index()
     corr_matrix = monthly_returns_all.corr()
     corr_start_row = full_metrics_start_row + full_metrics_df.shape[0] + 4
@@ -321,13 +325,11 @@ def analyze_strategies_alternate(strategies_df, portfolio_df, oos_date, excel_fi
     cum_start_row = pivot_start_row + portfolio_pivot.shape[0] + 4
     port_cum_df.to_excel(writer, sheet_name=portfolio_sheet, startrow=cum_start_row, startcol=0)
 
-    # --- Create Unique Sheet Names for Each Strategy and Write Their Data ---
+    # --- Create Unique Sheets for Each Strategy ---
     used_sheet_names = set()
     for strat in cum_df_rebased.columns:
         sheet_name = generate_sheet_name(strat, used_sheet_names)
-        # Write the strategy's metrics table at top.
         metrics_dict[strat].to_excel(writer, sheet_name=sheet_name, startrow=1, startcol=0)
-        # Write the strategy's year/month pivot table below the metrics table.
         pivot_df = pivot_dict[strat]
         start_row = metrics_dict[strat].shape[0] + 4
         pivot_df.to_excel(writer, sheet_name=sheet_name, startrow=start_row, startcol=0)
@@ -340,7 +342,6 @@ def analyze_strategies_alternate(strategies_df, portfolio_df, oos_date, excel_fi
             'mid_color': "#FFEB84",
             'max_color': "#63BE7B"
         })
-        # Write the cumulative return series (rebased to 100) at bottom.
         strat_cum_100 = rebase_to_100(cum_df_rebased[strat])
         strat_cum_df = strat_cum_100.to_frame(name='Total Return (Base=100)')
         cum_start_row = start_row + nrows_pivot + 4
@@ -349,69 +350,38 @@ def analyze_strategies_alternate(strategies_df, portfolio_df, oos_date, excel_fi
     writer.close()
     print(f"Excel workbook saved as {excel_filename}")
 
-# ----- Function to Retrieve Bloomberg Data for PX_LAST -----
-# This function remains unchanged except that it accepts a dictionary for tickers.
+# ----- Main Section: Read Data from Excel and Process -----
 
-def get_bbg_px_last(tickers_dict, start_date, end_date, freq='ME'):
-    """
-    Retrieves Bloomberg PX_LAST data for a set of tickers specified in tickers_dict.
-    
-    Parameters:
-        tickers_dict (dict): Dictionary where keys are Bloomberg tickers (e.g., 'IBM US Equity') 
-                             and values are display names (e.g., 'IBM').
-        start_date (str or datetime): Start date for data retrieval.
-        end_date (str or datetime): End date for data retrieval.
-        freq (str): Frequency for the output index; default is 'ME' (month-end).
-    
-    Returns:
-        pd.DataFrame: DataFrame with a DatetimeIndex (with the specified frequency) and columns
-                      renamed to the display names provided in tickers_dict.
-    """
-    # Extract Bloomberg tickers.
-    bbg_tickers = list(tickers_dict.keys())
-    
-    # Retrieve Bloomberg historical data for PX_LAST using monthly periodicity.
-    data = blp.bdh(bbg_tickers, 'PX_LAST', start_date, end_date, Per='M')
-    
-    # If the returned DataFrame has a MultiIndex on columns, extract the 'PX_LAST' level.
-    if isinstance(data.columns, pd.MultiIndex):
-        data = data.xs('PX_LAST', axis=1, level=1)
-    
-    # Create a full date range.
-    dates = pd.date_range(start=start_date, end=end_date, freq=freq)
-    data = data.reindex(dates)
-    data.sort_index(inplace=True)
-    
-    # Rename the columns using the provided mapping.
-    data.rename(columns=tickers_dict, inplace=True)
-    
-    return data
-
-# ----- Example Usage for Alternate Version -----
 if __name__ == "__main__":
-    # Define a dictionary for individual strategies (keys: Bloomberg tickers, values: friendly names).
-    strategies_tickers = {
+    # Read the provided Excel file (e.g., 'input_data.xlsx').
+    # The Excel file should have a 'Date' column, a portfolio ticker column, and one or more strategy ticker columns.
+    input_file = 'input_data.xlsx'  # Update with your actual file name.
+    df = pd.read_excel(input_file)
+    
+    # Convert the 'Date' column to datetime and set it as the index.
+    df['Date'] = pd.to_datetime(df['Date'])
+    df.set_index('Date', inplace=True)
+    
+    # Define your mapping dictionary to convert ticker headers to friendly names.
+    # For example, if the Excel columns are 'IBM US Equity', 'AAPL US Equity', etc.
+    ticker_mapping = {
+        'PortfolioTicker': 'Strategy',
         'Strategy_A_Ticker': 'Strategy_A',
         'Strategy_B_Ticker': 'Strategy_B',
         'Strategy_C_Ticker': 'Strategy_C'
+        # Add additional mappings as needed.
     }
     
-    # Define a dictionary for the portfolio ticker (single ticker).
-    portfolio_ticker_dict = {
-        'Portfolio_Ticker': 'Portfolio'
-    }
+    # Apply the mapping to all columns.
+    df.rename(columns=ticker_mapping, inplace=True)
     
-    # Set start and end dates.
-    start_date = '2010-01-01'
-    end_date   = '2020-12-31'
+    # Separate the portfolio ticker series and the individual strategy tickers.
+    portfolio_df = df[['Strategy']]
+    strategies_df = df.drop(columns=['Strategy'])
     
-    # Retrieve data for strategies and portfolio.
-    strategies_df = get_bbg_px_last(strategies_tickers, start_date, end_date, freq='ME')
-    portfolio_df = get_bbg_px_last(portfolio_ticker_dict, start_date, end_date, freq='ME')
-    
-    # Define a single out-of-sample date (applied to all series).
+    # Define a common out-of-sample date (applied to all series).
     oos_date = '2015-01-01'
     
-    # Call the alternate analysis function.
-    analyze_strategies_alternate(strategies_df, portfolio_df, oos_date, excel_filename='strategy_analysis_alternate.xlsx')
-    print("Alternate BBG data test case executed and Excel workbook 'strategy_analysis_alternate.xlsx' has been created.")
+    # Call the alternate analysis function with the provided data.
+    analyze_strategies_alternate(strategies_df, portfolio_df, oos_date, excel_filename='strategy_analysis_from_excel.xlsx')
+    print("Excel file processed and output workbook 'strategy_analysis_from_excel.xlsx' has been created.")
